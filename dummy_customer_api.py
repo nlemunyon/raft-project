@@ -36,10 +36,7 @@ ORDERS = [
 
 @app.route("/api/orders", methods=["GET"])
 def get_orders():
-    """
-    Returns all orders as messy text. In real life, customers
-    would have unpredictable formatting. The AI must parse it.
-    """
+
     limit = request.args.get("limit", type=int)
     orders = ORDERS[:limit] if limit else ORDERS
     logger.info("Serving %d orders (limit=%s)", len(orders), limit)

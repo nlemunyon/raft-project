@@ -108,12 +108,13 @@ async def parse_data(state: AgentState) -> dict:
     estimated_tokens = len(raw_text) // 4
     logger.info("parse_data: ~%d tokens of raw text, %d orders", estimated_tokens, len(orders_list))
 
-    if estimated_tokens > 12000 and orders_list:
-        # Chunk into groups and parse separately
-        chunk_size = max(1, len(orders_list) // 2)
-        chunks = [orders_list[i:i + chunk_size] for i in range(0, len(orders_list), chunk_size)]
-        logger.info("parse_data: chunking into %d groups", len(chunks))
-
+    if estimated_tokens > 4000 and orders_list:
+        MAX_TOKENS_PER_CHUNK = 4000
+        avg_tokens_per_order = estimated_tokens / len(orders_list)
+        orders_per_chunk = max(1, int(MAX_TOKENS_PER_CHUNK / avg_tokens_per_order))
+        chunks = [orders_list[i:i + orders_per_chunk] for i in range(0, len(orders_list), orders_per_chunk)]
+        logger.info("parse_data: chunking %d orders into %d groups (~%d orders each)",
+                    len(orders_list), len(chunks), orders_per_chunk)
         all_orders = []
         filter_criteria = {}
 
@@ -123,7 +124,7 @@ async def parse_data(state: AgentState) -> dict:
             try:
                 result: ParsedOrders = await asyncio.wait_for(
                     structured_llm.ainvoke(prompt),
-                    timeout=60.0,
+                    timeout=120.0,
                 )
                 all_orders.extend([o.model_dump() for o in result.orders])
                 if i == 0:
@@ -148,7 +149,7 @@ async def parse_data(state: AgentState) -> dict:
     try:
         result: ParsedOrders = await asyncio.wait_for(
             structured_llm.ainvoke(prompt),
-            timeout=60.0,
+            timeout=120.0,
         )
         parsed = [o.model_dump() for o in result.orders]
         filter_criteria = _extract_filter_dict(result)
