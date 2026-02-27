@@ -2,9 +2,6 @@
 venv/
 __pycache__/
 *.pyc
-*.db
-*.sqlite
-*.log
 .DS_Store
 frontend/node_modules/
 frontend/dist/
