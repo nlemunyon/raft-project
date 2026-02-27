@@ -34,7 +34,7 @@ llm = ChatOpenAI(
     base_url="https://openrouter.ai/api/v1",
     api_key=os.getenv("OPENROUTER_API_KEY"),
     temperature=0.0,
-    max_tokens=32768,
+    max_tokens=8192,
 )
 
 structured_llm = llm.with_structured_output(ParsedOrders)
@@ -67,7 +67,7 @@ async def fetch_data(state: AgentState) -> dict:
                 resp.raise_for_status()
                 data = resp.json()
 
-                # Resilient key lookup — handle unpredictable API schema changes
+                # Resilient key lookup -- handle unpredictable API schema changes
                 raw_orders_list = data.get("raw_orders") or data.get("orders") or data.get("data", {}).get("raw_orders")
                 if raw_orders_list is None:
                     for v in data.values():
@@ -76,7 +76,7 @@ async def fetch_data(state: AgentState) -> dict:
                             logger.warning("fetch_data: used fallback key detection for API response")
                             break
                 if not raw_orders_list:
-                    return {"error": "API response format unrecognized — no order list found"}
+                    return {"error": "API response format unrecognized -- no order list found"}
 
                 raw_text = "\n".join(raw_orders_list)
                 logger.info("fetch_data: fetched %d raw orders (%d chars)", len(raw_orders_list), len(raw_text))
@@ -104,12 +104,11 @@ async def parse_data(state: AgentState) -> dict:
     raw_text = state["raw_text"]
     query = state["query"]
 
-    # Estimate tokens and chunk if needed
     orders_list = state.get("raw_orders_list", [])
     estimated_tokens = len(raw_text) // 4
     logger.info("parse_data: ~%d tokens of raw text, %d orders", estimated_tokens, len(orders_list))
 
-    if (estimated_tokens > 6000 or len(orders_list) > 10) and orders_list:
+    if estimated_tokens > 12000 and orders_list:
         # Chunk into groups and parse separately
         chunk_size = max(1, len(orders_list) // 2)
         chunks = [orders_list[i:i + chunk_size] for i in range(0, len(orders_list), chunk_size)]
@@ -122,10 +121,15 @@ async def parse_data(state: AgentState) -> dict:
             chunk_text = "\n".join(chunk)
             prompt = _build_parse_prompt(query, chunk_text, is_chunk=True, chunk_num=i + 1, total_chunks=len(chunks))
             try:
-                result: ParsedOrders = await structured_llm.ainvoke(prompt)
+                result: ParsedOrders = await asyncio.wait_for(
+                    structured_llm.ainvoke(prompt),
+                    timeout=60.0,
+                )
                 all_orders.extend([o.model_dump() for o in result.orders])
                 if i == 0:
                     filter_criteria = _extract_filter_dict(result)
+            except asyncio.TimeoutError:
+                logger.error("parse_data: chunk %d timed out after 60s", i + 1)
             except Exception as e:
                 logger.error("parse_data: chunk %d failed: %s", i + 1, e)
 
@@ -142,7 +146,10 @@ async def parse_data(state: AgentState) -> dict:
     # Single-pass parse
     prompt = _build_parse_prompt(query, raw_text)
     try:
-        result: ParsedOrders = await structured_llm.ainvoke(prompt)
+        result: ParsedOrders = await asyncio.wait_for(
+            structured_llm.ainvoke(prompt),
+            timeout=60.0,
+        )
         parsed = [o.model_dump() for o in result.orders]
         filter_criteria = _extract_filter_dict(result)
         logger.info("parse_data: parsed %d orders, filters=%s", len(parsed), filter_criteria)
@@ -151,6 +158,9 @@ async def parse_data(state: AgentState) -> dict:
             "filter_criteria": filter_criteria,
             "error": None,
         }
+    except asyncio.TimeoutError:
+        logger.error("parse_data: LLM call timed out after 60s")
+        return {"error": "LLM parsing timed out after 60s"}
     except Exception as e:
         logger.error("parse_data: LLM parsing failed: %s", e)
         return {"error": f"LLM parsing failed: {str(e)}"}
@@ -201,7 +211,6 @@ async def validate(state: AgentState) -> dict:
 async def filter_and_respond(state: AgentState) -> dict:
     """Apply filters, enrich with ML predictions, and assemble final response."""
 
-    # Handle error state
     if state.get("error"):
         return {
             "response": {
@@ -219,7 +228,6 @@ async def filter_and_respond(state: AgentState) -> dict:
     orders = state["parsed_orders"]
     filters = state.get("filter_criteria", {})
 
-    # Apply filters in Python
     filtered = list(orders)
 
     if filters.get("state"):
@@ -233,16 +241,16 @@ async def filter_and_respond(state: AgentState) -> dict:
         filtered = [o for o in filtered if o["total"] <= filters["max_total"]]
 
     if filters.get("item_keyword"):
-        keyword = filters["item_keyword"].lower()
+        raw_keyword = filters["item_keyword"].lower()
+        keywords = [k.strip() for k in raw_keyword.replace(",", " or ").split(" or ") if k.strip()]
         filtered = [
             o for o in filtered
-            if any(keyword in item.lower() for item in o["items"])
+            if any(kw in item.lower() for item in o["items"] for kw in keywords)
         ]
 
     active_filters = {k: v for k, v in filters.items() if v is not None}
     logger.info("filter_and_respond: %d/%d orders match filters %s", len(filtered), len(orders), active_filters)
 
-    # ML predictions
     ml_predictions = []
     for order in filtered:
         try:
@@ -310,7 +318,7 @@ Raw order data:
 
 Instructions:
 - Extract every order completely and accurately
-- For state, convert full names to 2-letter codes (e.g., "Ohio" → "OH")
+- For state, convert full names to 2-letter codes (e.g., "Ohio" -> "OH")
 - For total, extract the numeric value without the $ sign
 - For items, extract as a list of strings
 - Do NOT invent orders that aren't in the text
@@ -367,7 +375,7 @@ if __name__ == "__main__":
     time.sleep(1)
 
     try:
-        query = sys.argv[1] if len(sys.argv) > 1 else "Show me all orders from x"
+        query = sys.argv[1] if len(sys.argv) > 1 else "Show me all orders"
         print(f"\nQuery: {query}\n")
         import json
         result = asyncio.run(run_agent(query))
