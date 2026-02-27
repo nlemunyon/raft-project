@@ -55,7 +55,6 @@ Open http://localhost:8000 in your browser.
 
 | Scenario | Behavior |
 |----------|----------|
-| API down | Retries 3 times with 1s delay, then returns error |
 | LLM fails to parse | Returns error with details |
 | Hallucinated order | Validation removes it, logs warning |
 | Large payload (>6000 tokens) | Chunks orders into groups, parses separately, merges |
@@ -121,5 +120,3 @@ raft-project/
 ## Tech Stack
 
 - **Backend**: Python, FastAPI, LangGraph, LangChain, OpenRouter (gpt-oss-120b:exacto), scikit-learn
-- **Frontend**: React 18, Vite, Tailwind CSS v4, Framer Motion, Lucide icons
-- **Design**: Dark minimal aesthetic (#0a0a0a background, #3b82f6 blue accent, Inter + JetBrains Mono)
